@@ -26,6 +26,7 @@ const PathInfo = Schema.Struct({
 export const VcsDiffQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   mode: Vcs.Mode,
+  context: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
 
 export class ApiVcsApplyError extends Schema.ErrorClass<ApiVcsApplyError>("VcsApplyError")(
@@ -75,8 +76,7 @@ export const InstanceApi = HttpApi.make("instance")
           OpenApi.annotations({
             identifier: "path.get",
             summary: "Get paths",
-            description:
-              "Retrieve the current working directory and related path information for the Kilo instance.", // kilocode_change
+            description: "Retrieve the current working directory and related path information for the Kilo instance.", // kilocode_change
           }),
         ),
         HttpApiEndpoint.get("vcs", InstancePaths.vcs, {

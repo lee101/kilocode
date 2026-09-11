@@ -9,8 +9,8 @@ import {
   sanitizeCustomProviderConfig,
   withCustomProviderDeletions,
 } from "./shared/custom-provider"
-import { CUSTOM_PROVIDER_PACKAGE, KILO_AUTO, parseModelString } from "./shared/provider-model"
-import { configFeatures } from "./features"
+import { isCustomProviderPackage, KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
+import { configFeatures, serverFeatures } from "./features"
 
 /**
  * Compute the default model selection from CLI config, VS Code settings, or hardcoded fallback.
@@ -33,7 +33,7 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 function customProvider(config: unknown) {
-  return record(config) && config.npm === CUSTOM_PROVIDER_PACKAGE
+  return record(config) && isCustomProviderPackage(config.npm)
 }
 
 function same(a: unknown, b: unknown): boolean {
@@ -50,7 +50,7 @@ function same(a: unknown, b: unknown): boolean {
   return akeys.every((key, index) => key === bkeys[index] && same(a[key], b[key]))
 }
 
-/** Fetch auth methods alongside the provider list. Auth states default to empty (endpoint not yet available). */
+/** Fetch provider availability and authentication state without exposing stored credentials. */
 export async function fetchProviderData(client: KiloClient, dir: string) {
   const authRequest =
     typeof client.provider.auth === "function"
@@ -59,10 +59,15 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
           .then((r) => r.data ?? {})
           .catch(() => ({}))
       : Promise.resolve({})
+  const kiloRequest = client.kilo
+    .authStatus({ directory: dir }, { throwOnError: true })
+    .then((r) => r.data)
+    .catch(() => undefined)
 
-  const [{ data: response }, authMethods] = await Promise.all([
+  const [{ data: response }, authMethods, kiloAuth] = await Promise.all([
     client.provider.list({ directory: dir }, { throwOnError: true }),
     authRequest,
+    kiloRequest,
   ])
   const authStates: Record<string, AuthState> = {}
   const storedKeys: Record<string, StoredProviderKey> = {}
@@ -83,7 +88,31 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
     delete next.key
     return next as (typeof response.all)[number]
   })
-  return { response: { ...response, all }, authMethods, authStates, storedKeys }
+  delete authStates[KILO_PROVIDER_ID]
+  if (kiloAuth?.authenticated && kiloAuth.type) authStates[KILO_PROVIDER_ID] = kiloAuth.type
+  const organizationId = kiloAuth ? (kiloAuth.organizationId ?? null) : undefined
+  const defaults = { ...response.default }
+  if (organizationId) {
+    const models = all.find((item) => item.id === KILO_PROVIDER_ID)?.models ?? {}
+    const recommended = response.default[KILO_PROVIDER_ID]
+    const model = recommended && Object.hasOwn(models, recommended) ? recommended : Object.keys(models).at(0)
+    if (model) defaults[KILO_PROVIDER_ID] = model
+    if (!model) delete defaults[KILO_PROVIDER_ID]
+  }
+  if (!kiloAuth) delete defaults[KILO_PROVIDER_ID]
+  return {
+    response: {
+      ...response,
+      all: kiloAuth ? all : all.filter((item) => item.id !== KILO_PROVIDER_ID),
+      connected: kiloAuth ? response.connected : response.connected.filter((id) => id !== KILO_PROVIDER_ID),
+      default: defaults,
+    },
+    authMethods,
+    authStates,
+    storedKeys,
+    organizationId,
+    ready: !!kiloAuth,
+  }
 }
 
 /**
@@ -233,7 +262,7 @@ async function refreshConfig(ctx: ActionContext, setCachedConfig: SetCachedConfi
     ctx.client.global.config.get({ throwOnError: true }),
   ])
   if (!config) return
-  const features = configFeatures(config)
+  const features = configFeatures(config, await serverFeatures(ctx.client, ctx.workspaceDir))
   setCachedConfig({ type: "configLoaded", config, globalConfig: global, features })
   ctx.postMessage({ type: "configUpdated", config, globalConfig: global, features })
 }
@@ -457,9 +486,10 @@ export async function saveCustomProvider(
 
     const merged = await ctx.client.config.get({ directory: ctx.workspaceDir }, { throwOnError: true })
     const config = merged.data ?? updated
-    const msg = { type: "configLoaded", config, globalConfig: updated, features: configFeatures(config) }
+    const features = configFeatures(config, await serverFeatures(ctx.client, ctx.workspaceDir))
+    const msg = { type: "configLoaded", config, globalConfig: updated, features }
     setCachedConfig(msg)
-    ctx.postMessage({ type: "configUpdated", config, globalConfig: updated, features: configFeatures(config) })
+    ctx.postMessage({ type: "configUpdated", config, globalConfig: updated, features })
 
     const auth = resolveCustomProviderAuth(apiKey, apiKeyChanged)
 

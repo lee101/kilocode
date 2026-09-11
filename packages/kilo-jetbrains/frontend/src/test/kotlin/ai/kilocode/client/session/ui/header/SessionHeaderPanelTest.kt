@@ -1,5 +1,6 @@
 package ai.kilocode.client.session.ui.header
 
+import ai.kilocode.client.plugin.KiloBundle
 import ai.kilocode.client.session.model.Reasoning
 import ai.kilocode.client.session.model.StepFinish
 import ai.kilocode.client.session.model.Tool
@@ -19,12 +20,15 @@ import ai.kilocode.rpc.dto.TodoDto
 import ai.kilocode.rpc.dto.TokensDto
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.PropertiesComponent
+import ai.kilocode.rpc.dto.DiffFileDto
 import java.awt.Cursor
 import java.awt.Color
 import java.awt.Point
 import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 import java.awt.image.BufferedImage
+import javax.swing.JComponent
+import javax.swing.RepaintManager
 import javax.swing.UIManager
 
 class SessionHeaderPanelTest : SessionControllerTestBase() {
@@ -72,7 +76,7 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         assertEquals("cache read 75", panel.cacheReadText())
         assertEquals("1/2 todos complete", panel.todoText())
         assertTrue(panel.todoVisible())
-        assertEquals(style.editorBackground, panel.background)
+        assertEquals(SessionUiStyle.Colors.sessionBackground(), panel.background)
         assertEquals(
             List(panel.foregrounds().size) { style.editorForeground },
             panel.foregrounds(),
@@ -120,6 +124,31 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         panel.compactButton().doClick()
         flush()
         assertEquals(1, rpc.compacts.size)
+    }
+
+    fun `test clicking session title toggles expansion`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+
+        assertFalse(panel.isExpanded())
+
+        click(panel.titleLabel())
+        assertTrue(panel.isExpanded())
+
+        click(panel.titleLabel())
+        assertFalse(panel.isExpanded())
+    }
+
+    fun `test top row places expand title and right controls`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+        val top = panel.expandButton().parent
+        val layout = top.layout as java.awt.BorderLayout
+
+        assertSame(panel.expandButton(), layout.getLayoutComponent(java.awt.BorderLayout.WEST))
+        assertSame(panel.titleLabel(), layout.getLayoutComponent(java.awt.BorderLayout.CENTER))
+        assertSame(panel.rightPanel(), layout.getLayoutComponent(java.awt.BorderLayout.EAST))
+        assertSame(panel.rightPanel(), panel.compactButton().parent)
     }
 
     fun `test todo list starts collapsed and toggles independently`() {
@@ -194,7 +223,7 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
 
         panel.applyStyle(style)
 
-        assertEquals(style.editorBackground, panel.background)
+        assertEquals(SessionUiStyle.Colors.sessionBackground(), panel.background)
         assertEquals(
             List(panel.foregrounds().size) { style.editorForeground },
             panel.foregrounds(),
@@ -433,8 +462,9 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         val c = promptedHeader()
         val panel = SessionHeaderPanel(c, parent)
         repeat(12) { idx ->
-            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_more_$idx", "bash", "running", "More $idx")))
+            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_more_$idx", "bash", "running", "More $idx")), flush = false)
         }
+        flush()
         panel.timelineViewport().setSize(panel.timelineBarWidth() * 4, panel.timelineViewportPreferredSize().height)
         panel.timelineViewport().doLayout()
         panel.timelineViewport().viewPosition = Point(0, 0)
@@ -471,8 +501,9 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         val c = promptedHeader()
         val panel = SessionHeaderPanel(c, parent)
         repeat(12) { idx ->
-            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_touch_$idx", "bash", "running", "Touch $idx")))
+            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_touch_$idx", "bash", "running", "Touch $idx")), flush = false)
         }
+        flush()
         panel.timelineViewport().setSize(panel.timelineBarWidth() * 4, panel.timelineViewportPreferredSize().height)
         panel.timelineViewport().doLayout()
         panel.timelineViewport().viewPosition = Point(0, 0)
@@ -505,8 +536,9 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         val c = promptedHeader()
         val panel = SessionHeaderPanel(c, parent)
         repeat(12) { idx ->
-            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_wheel_$idx", "bash", "running", "Wheel $idx")))
+            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_wheel_$idx", "bash", "running", "Wheel $idx")), flush = false)
         }
+        flush()
         panel.timelineViewport().setSize(panel.timelineBarWidth() * 4, panel.timelineViewportPreferredSize().height)
         panel.timelineViewport().doLayout()
         panel.timelineViewport().viewPosition = Point(0, 0)
@@ -539,8 +571,9 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         val c = promptedHeader()
         val panel = SessionHeaderPanel(c, parent)
         repeat(12) { idx ->
-            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_more_$idx", "bash", "running", "More $idx")))
+            emit(ChatEventDto.PartUpdated("ses_test", tool("tool_more_$idx", "bash", "running", "More $idx")), flush = false)
         }
+        flush()
         panel.timelineViewport().setSize(panel.timelineBarWidth() * 4, panel.timelineViewportPreferredSize().height)
         panel.timelineViewport().doLayout()
         panel.timelineViewport().viewPosition = Point(0, 0)
@@ -580,16 +613,17 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         edt { c.prompt("go") }
         flush()
 
-        emit(ChatEventDto.SessionUpdated("ses_test", session("ses_test", title = "Generated title")))
-        emit(ChatEventDto.MessageUpdated("ses_test", assistant()))
-        emit(ChatEventDto.PartUpdated("ses_test", reasoning(done = false, text = "Thinking")))
-        emit(ChatEventDto.PartUpdated("ses_test", tool("tool_1", "bash", "running", "Run tests", input = mapOf("cmd" to "test", "files" to "src"))))
-        emit(ChatEventDto.PartUpdated("ses_test", tool("tool_2", "edit", "error", "Edit file", input = mapOf("cmd" to "test", "files" to "src"))))
-        emit(ChatEventDto.PartUpdated("ses_test", stepFinish()))
+        emit(ChatEventDto.SessionUpdated("ses_test", session("ses_test", title = "Generated title")), flush = false)
+        emit(ChatEventDto.MessageUpdated("ses_test", assistant()), flush = false)
+        emit(ChatEventDto.PartUpdated("ses_test", reasoning(done = false, text = "Thinking")), flush = false)
+        emit(ChatEventDto.PartUpdated("ses_test", tool("tool_1", "bash", "running", "Run tests", input = mapOf("cmd" to "test", "files" to "src"))), flush = false)
+        emit(ChatEventDto.PartUpdated("ses_test", tool("tool_2", "edit", "error", "Edit file", input = mapOf("cmd" to "test", "files" to "src"))), flush = false)
+        emit(ChatEventDto.PartUpdated("ses_test", stepFinish()), flush = false)
         emit(ChatEventDto.TodoUpdated("ses_test", listOf(
             TodoDto("Write tests", "completed", "high"),
             TodoDto("Ship it", "pending", "medium"),
-        )))
+        )), flush = false)
+        flush()
         return c
     }
 
@@ -671,5 +705,20 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
 
     private fun reset() {
         PropertiesComponent.getInstance().unsetValue(SessionHeaderPanel.EXPANDED_KEY)
+    }
+
+    private class TrackingRepaintManager(private val watched: JComponent) : RepaintManager() {
+        val dirty = mutableListOf<JComponent>()
+        val invalid = mutableListOf<JComponent>()
+
+        override fun addDirtyRegion(c: JComponent, x: Int, y: Int, w: Int, h: Int) {
+            if (c === watched) dirty.add(c)
+            super.addDirtyRegion(c, x, y, w, h)
+        }
+
+        override fun addInvalidComponent(invalidComponent: JComponent) {
+            if (invalidComponent === watched) invalid.add(invalidComponent)
+            super.addInvalidComponent(invalidComponent)
+        }
     }
 }

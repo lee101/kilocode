@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AudioPlayOptions, AudioSound } from "@opentui/core"
-import { createTuiAttention } from "@/cli/cmd/tui/attention"
-import type { TuiConfig } from "@/cli/cmd/tui/config/tui"
+import { createTuiAttention } from "@opencode-ai/tui/attention"
+import type { TuiConfig } from "@opencode-ai/tui/config"
 
 type FocusEvent = "focus" | "blur"
 
@@ -184,7 +184,8 @@ describe("createTuiAttention", () => {
     const attention = createTuiAttention({ renderer, config: config(), audio: new FakeAudioEngine() })
     renderer.emit("blur")
 
-    expect(await attention.notify({ title: "Kilo", message: "hello", sound: false })).toEqual({ // kilocode_change
+    expect(await attention.notify({ title: "Kilo", message: "hello", sound: false })).toEqual({
+      // kilocode_change
       ok: true,
       notification: true,
       sound: false,
